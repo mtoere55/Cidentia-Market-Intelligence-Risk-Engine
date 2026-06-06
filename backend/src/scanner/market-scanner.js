@@ -1,5 +1,6 @@
 import { getBitgetTopSymbols, getCombinedTicker } from '../exchanges/exchange-manager.js';
 import { analyzeSmartMarket } from '../intelligence/advanced-intelligence.js';
+import { attachOperatorAdvice, buildOperatorSummary } from '../operator/operator-advice.js';
 
 export const DEFAULT_SCANNER_SYMBOLS = [
   'BTCUSDT',
@@ -94,7 +95,9 @@ function buildTopLists(results) {
   const ranked = [...results].sort((a, b) => {
     const rrA = Number(a.virtualTradePlan?.riskRewardToTp1 || 0);
     const rrB = Number(b.virtualTradePlan?.riskRewardToTp1 || 0);
-    return (b.score + b.confidence + rrB * 20) - (a.score + a.confidence + rrA * 20);
+    const opA = Number(a.operatorAdvice?.priority || 0);
+    const opB = Number(b.operatorAdvice?.priority || 0);
+    return (b.score + b.confidence + rrB * 20 + opB) - (a.score + a.confidence + rrA * 20 + opA);
   });
 
   return {
@@ -109,6 +112,7 @@ function buildTopLists(results) {
         risk: item.riskTier,
         rr: item.virtualTradePlan?.riskRewardToTp1 ?? null,
         plan: opportunityTier(item),
+        operator: item.operatorAdvice?.label || null,
       })),
     highestRisk: ranked
       .filter((item) => item.riskTier === 'high' || item.riskTier === 'extreme' || item.decision.action.startsWith('AVOID'))
@@ -119,6 +123,7 @@ function buildTopLists(results) {
         direction: item.directionBias,
         risk: item.riskTier,
         decision: item.decision.label,
+        operator: item.operatorAdvice?.label || null,
       })),
   };
 }
@@ -200,7 +205,7 @@ export async function scanMarket(options = {}) {
   const uniqueSymbols = [...new Set(resolved.symbols.map((symbol) => String(symbol).trim().toUpperCase()).filter(Boolean))];
   const limitedSymbols = uniqueSymbols.slice(0, limit);
 
-  const results = await Promise.all(
+  const rawResults = await Promise.all(
     limitedSymbols.map(async (symbol) => {
       try {
         return await scanSymbol(symbol, { accountSizeEur, riskPercent });
@@ -244,8 +249,12 @@ export async function scanMarket(options = {}) {
     })
   );
 
-  const sorted = results.sort((a, b) => {
+  const advised = attachOperatorAdvice(rawResults);
+
+  const sorted = advised.sort((a, b) => {
     const actionWeight = (item) => {
+      if (item.operatorAdvice?.operatorAction === 'VIRTUAL_TEST_STRONG') return 60;
+      if (item.operatorAdvice?.operatorAction === 'VIRTUAL_TEST_SMALL') return 45;
       if (item.opportunityTier === 'güçlü aday') return 45;
       if (item.opportunityTier === 'sanal aday') return 30;
       if (item.decision.action === 'LONG_WATCH' || item.decision.action === 'SHORT_WATCH') return 20;
@@ -262,6 +271,10 @@ export async function scanMarket(options = {}) {
     avoid: sorted.filter((item) => item.decision.action.startsWith('AVOID')).length,
     virtualReady: sorted.filter((item) => item.virtualTradePlan?.quality === 'sanal test uygun').length,
     strongCandidates: sorted.filter((item) => item.opportunityTier === 'güçlü aday').length,
+    operatorStrongVirtual: sorted.filter((item) => item.operatorAdvice?.operatorAction === 'VIRTUAL_TEST_STRONG').length,
+    operatorSmallVirtual: sorted.filter((item) => item.operatorAdvice?.operatorAction === 'VIRTUAL_TEST_SMALL').length,
+    operatorWatchOnly: sorted.filter((item) => item.operatorAdvice?.operatorAction === 'WATCH_ONLY').length,
+    operatorAvoid: sorted.filter((item) => item.operatorAdvice?.operatorAction === 'AVOID').length,
     green: sorted.filter((item) => item.regime === 'green').length,
     yellow: sorted.filter((item) => item.regime === 'yellow').length,
     red: sorted.filter((item) => item.regime === 'red').length,
@@ -269,9 +282,9 @@ export async function scanMarket(options = {}) {
 
   return {
     ok: true,
-    mode: 'bitget-dynamic-market-smart-demo',
-    version: '0.6-dynamic-bitget-opportunity-engine',
-    explanation: 'Sistem varsayılan olarak Bitget USDT piyasasında hacme göre en güçlü coinleri seçer. Sanal işlem gerçek para kullanmaz.',
+    mode: 'bitget-operator-decision-demo',
+    version: '0.7-operator-advice-engine',
+    explanation: 'Sistem Bitget USDT piyasasında hacimli coinleri tarar ve her coin için “ben olsam ne yapardım?” kararını üretir. Sanal işlem gerçek para kullanmaz.',
     scannerSource: resolved.source,
     scannerWarning: resolved.warning || null,
     accountModel: {
@@ -283,6 +296,7 @@ export async function scanMarket(options = {}) {
     generatedAt: new Date().toISOString(),
     symbols: limitedSymbols,
     summary,
+    operatorSummary: buildOperatorSummary(sorted),
     topLists: buildTopLists(sorted),
     results: sorted,
   };
