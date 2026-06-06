@@ -1,0 +1,1 @@
+{"name":"cidentia-market-intelligence-risk-engine","version":"0.1.0","private":true,"type":"module","description":"Cidentia Market Intelligence and Risk Engine demo deployment","scripts":{"start":"node backend/src/server.js","dev":"node backend/src/server.js"},"dependencies":{"express":"^4.18.3","cors":"^2.8.5","dotenv":"^16.4.5"},"engines":{"node":"20.x"}}
