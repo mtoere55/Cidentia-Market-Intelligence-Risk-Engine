@@ -10,6 +10,16 @@ export function getPaperState() {
   return paperState;
 }
 
+export function resetPaperState() {
+  paperState.positions = [];
+  paperState.journal.push({
+    id: `paper_reset_${Date.now()}`,
+    createdAt: new Date().toISOString(),
+    type: 'PAPER_STATE_RESET',
+  });
+  return paperState;
+}
+
 export function openPaperTrade(order) {
   const risk = evaluateTradeRisk({
     exchange: order.exchange,
