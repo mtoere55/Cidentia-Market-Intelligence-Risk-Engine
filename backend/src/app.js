@@ -4,7 +4,7 @@ import { config, realTradingGateIsOpen } from './config.js';
 import { getAllExchangeHealth, getCombinedTicker, getExchange, listExchanges } from './exchanges/exchange-manager.js';
 import { analyzeTicker, combineExchangeAnalysis } from './intelligence/simple-intelligence.js';
 import { evaluateTradeRisk } from './risk-engine/risk-engine.js';
-import { getPaperState, openPaperTrade } from './paper-trading/paper-engine.js';
+import { getPaperState, openPaperTrade, resetPaperState } from './paper-trading/paper-engine.js';
 import { DEFAULT_SCANNER_SYMBOLS, scanMarket } from './scanner/market-scanner.js';
 
 export const app = express();
@@ -32,8 +32,10 @@ function dashboardHtml() {
     .value { font-size:24px; font-weight:700; margin-top:7px; }
     .safe { color:#4ade80; } .warn { color:#facc15; } .danger { color:#fb7185; }
     button { border:0; border-radius:12px; padding:12px 16px; font-weight:700; cursor:pointer; background:#2f6df6; color:white; margin:6px 8px 6px 0; }
+    button.secondary { background:#334155; }
+    button.dangerBtn { background:#9f1239; }
     code, pre { background:#050814; border:1px solid #1f2a44; border-radius:14px; color:#d7e4ff; }
-    pre { padding:16px; overflow:auto; min-height:180px; }
+    pre { padding:16px; overflow:auto; min-height:120px; max-height:360px; }
     a { color:#93c5fd; }
     table { width:100%; border-collapse:collapse; margin-top:14px; overflow:hidden; border-radius:14px; }
     th, td { border-bottom:1px solid #1f2a44; padding:11px 10px; text-align:left; font-size:14px; }
@@ -43,6 +45,7 @@ function dashboardHtml() {
     .pill.yellow { background:rgba(250,204,21,.14); color:#facc15; }
     .pill.red { background:rgba(251,113,133,.14); color:#fb7185; }
     .muted { color:#8fa1c4; }
+    .notice { margin-top:14px; padding:12px 14px; border:1px solid #334155; border-radius:14px; color:#cbd5e1; background:#0a1020; }
   </style>
 </head>
 <body>
@@ -62,7 +65,10 @@ function dashboardHtml() {
         <button onclick="loadMarket('BTCUSDT')">BTCUSDT Analiz</button>
         <button onclick="loadMarket('ETHUSDT')">ETHUSDT Analiz</button>
         <button onclick="openPaperDemo()">Paper Trade Test</button>
+        <button class="dangerBtn" onclick="resetPaper()">Paper Sıfırla</button>
+        <button class="secondary" onclick="clearOutput()">Çıktıyı Temizle</button>
       </p>
+      <div class="notice">Not: Binance Vercel cloud üzerinde 451 ile bloklanabilir. Bu durumda panel Bitget verisiyle çalışır; VPS/server aşamasında Binance tekrar normal denenir.</div>
     </section>
 
     <div class="card" style="margin-top:18px;">
@@ -91,10 +97,16 @@ function dashboardHtml() {
     <pre id="out">Panel yükleniyor...</pre>
   </div>
 <script>
+function show(data) {
+  document.getElementById('out').textContent = JSON.stringify(data, null, 2);
+}
+function showSmall(label, data) {
+  document.getElementById('out').textContent = label + '\n' + JSON.stringify(data, null, 2);
+}
 async function api(path, options) {
   const res = await fetch(path, options);
   const data = await res.json();
-  document.getElementById('out').textContent = JSON.stringify(data, null, 2);
+  show(data);
   return data;
 }
 function money(value) {
@@ -136,6 +148,7 @@ async function loadScanner() {
     '</tr>';
   }).join('');
   document.getElementById('scannerTable').innerHTML = '<table><thead><tr><th>Coin</th><th>Score</th><th>Regime</th><th>Karar</th><th>Binance</th><th>Bitget</th><th>Spread</th><th>Sebep</th></tr></thead><tbody>' + rows + '</tbody></table>';
+  showSmall('Scanner özeti: ' + data.count + ' coin tarandı.', data.results.map(item => ({ symbol:item.symbol, score:item.score, regime:item.regime, karar:item.decision.label, reasons:item.reasons })));
 }
 async function openPaperDemo() {
   await api('/paper/open', {
@@ -144,6 +157,13 @@ async function openPaperDemo() {
     body:JSON.stringify({ exchange:'binance', symbol:'BTCUSDT', side:'long', entryPrice:100000, stopLoss:99000, takeProfit:102000, positionSizeEur:100 })
   });
   await loadStatus();
+}
+async function resetPaper() {
+  const data = await api('/paper/reset', { method:'POST' });
+  document.getElementById('paper').textContent = data.positions.length;
+}
+function clearOutput() {
+  document.getElementById('out').textContent = 'Çıktı temizlendi.';
 }
 loadStatus();
 loadScanner();
@@ -227,6 +247,10 @@ app.get('/paper', (req, res) => {
 
 app.post('/paper/open', (req, res) => {
   res.json(openPaperTrade(req.body || {}));
+});
+
+app.post('/paper/reset', (req, res) => {
+  res.json(resetPaperState());
 });
 
 app.post('/order/live', (req, res) => {
