@@ -5,6 +5,7 @@ import { getAllExchangeHealth, getCombinedTicker, getExchange, listExchanges } f
 import { analyzeTicker, combineExchangeAnalysis } from './intelligence/simple-intelligence.js';
 import { evaluateTradeRisk } from './risk-engine/risk-engine.js';
 import { getPaperState, openPaperTrade } from './paper-trading/paper-engine.js';
+import { DEFAULT_SCANNER_SYMBOLS, scanMarket } from './scanner/market-scanner.js';
 
 export const app = express();
 
@@ -21,7 +22,7 @@ function dashboardHtml() {
   <style>
     :root { color-scheme: dark; }
     body { margin:0; font-family: Arial, sans-serif; background:#080b12; color:#eef3ff; }
-    .wrap { max-width:1180px; margin:0 auto; padding:28px; }
+    .wrap { max-width:1280px; margin:0 auto; padding:28px; }
     .hero { border:1px solid #1f2a44; border-radius:22px; padding:26px; background:linear-gradient(135deg,#10182a,#0b1020); box-shadow:0 16px 60px rgba(0,0,0,.35); }
     h1 { margin:0 0 8px; font-size:30px; }
     p { color:#aebbd4; line-height:1.55; }
@@ -34,6 +35,14 @@ function dashboardHtml() {
     code, pre { background:#050814; border:1px solid #1f2a44; border-radius:14px; color:#d7e4ff; }
     pre { padding:16px; overflow:auto; min-height:180px; }
     a { color:#93c5fd; }
+    table { width:100%; border-collapse:collapse; margin-top:14px; overflow:hidden; border-radius:14px; }
+    th, td { border-bottom:1px solid #1f2a44; padding:11px 10px; text-align:left; font-size:14px; }
+    th { color:#8fa1c4; background:#0a1020; }
+    .pill { display:inline-block; padding:5px 9px; border-radius:999px; font-weight:700; font-size:12px; }
+    .pill.green { background:rgba(74,222,128,.14); color:#4ade80; }
+    .pill.yellow { background:rgba(250,204,21,.14); color:#facc15; }
+    .pill.red { background:rgba(251,113,133,.14); color:#fb7185; }
+    .muted { color:#8fa1c4; }
   </style>
 </head>
 <body>
@@ -44,22 +53,30 @@ function dashboardHtml() {
       <div class="grid">
         <div class="card"><div class="label">Trading Mode</div><div id="mode" class="value">loading</div></div>
         <div class="card"><div class="label">Real Trading Gate</div><div id="gate" class="value">loading</div></div>
-        <div class="card"><div class="label">Default Symbol</div><div id="symbol" class="value">BTCUSDT</div></div>
+        <div class="card"><div class="label">Scanner</div><div id="scannerCount" class="value">0</div></div>
         <div class="card"><div class="label">Paper Positions</div><div id="paper" class="value">0</div></div>
       </div>
       <p>
         <button onclick="loadStatus()">Status Oku</button>
+        <button onclick="loadScanner()">Market Scanner v0.2</button>
         <button onclick="loadMarket('BTCUSDT')">BTCUSDT Analiz</button>
         <button onclick="loadMarket('ETHUSDT')">ETHUSDT Analiz</button>
         <button onclick="openPaperDemo()">Paper Trade Test</button>
       </p>
     </section>
 
+    <div class="card" style="margin-top:18px;">
+      <h2>Market Scanner v0.2</h2>
+      <p>Çoklu coin taraması. Kararlar sadece demo/paper mod içindir: izlenebilir, bekle, riskli.</p>
+      <div id="scannerTable" class="muted">Scanner henüz çalışmadı.</div>
+    </div>
+
     <div class="grid">
       <div class="card">
         <h2>Canlı API</h2>
         <p><a href="/health">/health</a></p>
         <p><a href="/status">/status</a></p>
+        <p><a href="/scanner">/scanner</a></p>
         <p><a href="/market/BTCUSDT">/market/BTCUSDT</a></p>
         <p><a href="/exchange/binance/ticker/BTCUSDT">/exchange/binance/ticker/BTCUSDT</a></p>
         <p><a href="/exchange/bitget/ticker/BTCUSDT">/exchange/bitget/ticker/BTCUSDT</a></p>
@@ -80,16 +97,46 @@ async function api(path, options) {
   document.getElementById('out').textContent = JSON.stringify(data, null, 2);
   return data;
 }
+function money(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return '-';
+  return Number(value).toLocaleString('en-US', { maximumFractionDigits: 6 });
+}
+function pct(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return '-';
+  return Number(value).toFixed(2) + '%';
+}
+function pill(regime) {
+  const cls = regime === 'green' ? 'green' : regime === 'yellow' ? 'yellow' : 'red';
+  return '<span class="pill ' + cls + '">' + regime + '</span>';
+}
 async function loadStatus() {
   const data = await api('/status');
   document.getElementById('mode').textContent = data.config.tradingMode;
   document.getElementById('mode').className = 'value safe';
   document.getElementById('gate').textContent = data.config.realTradingGateOpen ? 'OPEN' : 'LOCKED';
   document.getElementById('gate').className = data.config.realTradingGateOpen ? 'value danger' : 'value safe';
-  document.getElementById('symbol').textContent = data.config.defaultSymbol;
   document.getElementById('paper').textContent = data.paper.positions.length;
 }
 async function loadMarket(symbol) { await api('/market/' + symbol); }
+async function loadScanner() {
+  const data = await api('/scanner');
+  document.getElementById('scannerCount').textContent = data.count;
+  const rows = data.results.map((item) => {
+    const binance = item.exchanges.find((x) => x.exchange === 'binance') || {};
+    const bitget = item.exchanges.find((x) => x.exchange === 'bitget') || {};
+    return '<tr>' +
+      '<td><b>' + item.symbol + '</b></td>' +
+      '<td>' + item.score + '</td>' +
+      '<td>' + pill(item.regime) + '</td>' +
+      '<td>' + item.decision.label + '</td>' +
+      '<td>' + money(binance.lastPrice) + '</td>' +
+      '<td>' + money(bitget.lastPrice) + '</td>' +
+      '<td>' + pct(item.spreadPercent) + '</td>' +
+      '<td class="muted">' + item.reasons.slice(0, 3).join(', ') + '</td>' +
+    '</tr>';
+  }).join('');
+  document.getElementById('scannerTable').innerHTML = '<table><thead><tr><th>Coin</th><th>Score</th><th>Regime</th><th>Karar</th><th>Binance</th><th>Bitget</th><th>Spread</th><th>Sebep</th></tr></thead><tbody>' + rows + '</tbody></table>';
+}
 async function openPaperDemo() {
   await api('/paper/open', {
     method:'POST',
@@ -99,6 +146,7 @@ async function openPaperDemo() {
   await loadStatus();
 }
 loadStatus();
+loadScanner();
 </script>
 </body>
 </html>`;
@@ -139,6 +187,13 @@ app.get('/status', async (req, res) => {
     exchangeHealth,
     paper: getPaperState(),
   });
+});
+
+app.get('/scanner', async (req, res) => {
+  const symbols = req.query.symbols
+    ? String(req.query.symbols).split(',')
+    : DEFAULT_SCANNER_SYMBOLS;
+  res.json(await scanMarket(symbols));
 });
 
 app.get('/market/:symbol', async (req, res) => {
