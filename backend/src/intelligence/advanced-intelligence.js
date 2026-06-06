@@ -12,6 +12,11 @@ function getValidTickers(tickers) {
   return tickers.filter((ticker) => ticker && ticker.ok !== false && Number.isFinite(Number(ticker.lastPrice)) && Number(ticker.lastPrice) > 0);
 }
 
+function pickPrimaryTicker(tickers) {
+  const valid = getValidTickers(tickers);
+  return valid.find((ticker) => ticker.exchange === 'bitget') || valid[0] || null;
+}
+
 function liquidityScoreFromQuoteVolume(quoteVolume) {
   const value = Number(quoteVolume || 0);
   if (value >= 500_000_000) return 100;
@@ -53,6 +58,16 @@ function calculateRangePercent(ticker) {
   }
 
   return ((high - low) / last) * 100;
+}
+
+function roundPrice(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  if (Math.abs(n) >= 1000) return Number(n.toFixed(2));
+  if (Math.abs(n) >= 100) return Number(n.toFixed(3));
+  if (Math.abs(n) >= 1) return Number(n.toFixed(4));
+  if (Math.abs(n) >= 0.01) return Number(n.toFixed(6));
+  return Number(n.toFixed(8));
 }
 
 function marketRegimeFromScore(score, riskTier) {
@@ -129,7 +144,7 @@ function smartActionFromMetrics({ avgChange, absChange, avgRangePosition, liquid
       code: 'LONG_WATCH',
       label: 'long izle',
       direction: 'long',
-      explanation: 'Momentum pozitif ama aşırı tepede değil; sadece paper/manual izleme adayı.',
+      explanation: 'Momentum pozitif ama aşırı tepede değil; sadece sanal/manual izleme adayı.',
     };
   }
 
@@ -138,7 +153,7 @@ function smartActionFromMetrics({ avgChange, absChange, avgRangePosition, liquid
       code: 'SHORT_WATCH',
       label: 'short izle',
       direction: 'short',
-      explanation: 'Momentum negatif ama panik dipte değil; sadece paper/manual izleme adayı.',
+      explanation: 'Momentum negatif ama panik dipte değil; sadece sanal/manual izleme adayı.',
     };
   }
 
@@ -159,8 +174,72 @@ function smartActionFromMetrics({ avgChange, absChange, avgRangePosition, liquid
   };
 }
 
+function buildVirtualTradePlan({ symbol, primaryTicker, smartAction, riskTier, confidence }) {
+  if (!primaryTicker || !['long', 'short'].includes(smartAction.direction)) {
+    return {
+      enabled: false,
+      mode: 'sanal test',
+      explanation: 'Bu coin için şu an sanal işlem planı üretilmedi; sistem beklemeyi tercih ediyor.',
+    };
+  }
+
+  const last = Number(primaryTicker.lastPrice);
+  const high = Number(primaryTicker.highPrice);
+  const low = Number(primaryTicker.lowPrice);
+  const rawRange = Number.isFinite(high) && Number.isFinite(low) && high > low ? high - low : last * 0.04;
+  const safeRange = Math.max(rawRange, last * 0.01);
+  const side = smartAction.direction;
+
+  let entryLow;
+  let entryHigh;
+  let stopLoss;
+  let takeProfit1;
+  let takeProfit2;
+
+  if (side === 'long') {
+    entryLow = last - safeRange * 0.08;
+    entryHigh = last + safeRange * 0.03;
+    stopLoss = Math.min(low - safeRange * 0.05, last - safeRange * 0.28);
+    takeProfit1 = last + safeRange * 0.22;
+    takeProfit2 = last + safeRange * 0.42;
+  } else {
+    entryLow = last - safeRange * 0.03;
+    entryHigh = last + safeRange * 0.08;
+    stopLoss = Math.max(high + safeRange * 0.05, last + safeRange * 0.28);
+    takeProfit1 = last - safeRange * 0.22;
+    takeProfit2 = last - safeRange * 0.42;
+  }
+
+  const entryMid = (entryLow + entryHigh) / 2;
+  const risk = Math.abs(entryMid - stopLoss);
+  const reward = Math.abs(takeProfit1 - entryMid);
+  const rr = risk > 0 ? reward / risk : null;
+
+  let quality = 'sadece izle';
+  if (confidence >= 65 && rr !== null && rr >= 0.8 && riskTier !== 'high') quality = 'sanal test uygun';
+  if (confidence < 45 || riskTier === 'extreme') quality = 'bekle';
+
+  return {
+    enabled: true,
+    mode: 'sanal test',
+    dataSource: primaryTicker.exchange || 'bitget',
+    side,
+    entryZone: {
+      from: roundPrice(Math.min(entryLow, entryHigh)),
+      to: roundPrice(Math.max(entryLow, entryHigh)),
+    },
+    stopLoss: roundPrice(stopLoss),
+    takeProfit1: roundPrice(takeProfit1),
+    takeProfit2: roundPrice(takeProfit2),
+    riskRewardToTp1: rr === null ? null : Number(rr.toFixed(2)),
+    quality,
+    explanation: 'Bu gerçek emir değildir. Sistem sadece fiyat buraya gelirse sanal test için izlenecek bölgeyi hesaplar.',
+  };
+}
+
 export function analyzeSmartMarket({ symbol, tickers, spreadPercent = null }) {
   const validTickers = getValidTickers(tickers);
+  const primaryTicker = pickPrimaryTicker(tickers);
   const unavailable = tickers.filter((ticker) => ticker && ticker.ok === false);
   const reasons = [];
   const warnings = [];
@@ -173,11 +252,17 @@ export function analyzeSmartMarket({ symbol, tickers, spreadPercent = null }) {
       regime: 'red',
       riskTier: 'extreme',
       directionBias: 'none',
+      primaryExchange: null,
       smartAction: {
         code: 'NO_MARKET_DATA',
         label: 'veri yok',
         direction: 'none',
         explanation: 'Hiçbir borsadan geçerli fiyat alınamadı.',
+      },
+      virtualTradePlan: {
+        enabled: false,
+        mode: 'sanal test',
+        explanation: 'Veri olmadığı için sanal işlem planı üretilmedi.',
       },
       metrics: {
         validExchangeCount: 0,
@@ -193,14 +278,15 @@ export function analyzeSmartMarket({ symbol, tickers, spreadPercent = null }) {
     };
   }
 
-  const avgChange = average(validTickers.map((ticker) => Number(ticker.priceChangePercent)));
+  const analysisTickers = primaryTicker ? [primaryTicker] : validTickers;
+  const avgChange = average(analysisTickers.map((ticker) => Number(ticker.priceChangePercent)));
   const absChange = Math.abs(avgChange || 0);
-  const avgRangePosition = average(validTickers.map(calculateRangePosition));
-  const avgRangePercent = average(validTickers.map(calculateRangePercent));
-  const liquidityScore = Math.round(average(validTickers.map((ticker) => liquidityScoreFromQuoteVolume(ticker.quoteVolume))) || 0);
+  const avgRangePosition = average(analysisTickers.map(calculateRangePosition));
+  const avgRangePercent = average(analysisTickers.map(calculateRangePercent));
+  const liquidityScore = Math.round(average(analysisTickers.map((ticker) => liquidityScoreFromQuoteVolume(ticker.quoteVolume))) || 0);
   const actualSpreadPercent = spreadPercent ?? calculateSpreadPercent(validTickers);
 
-  if (validTickers.length === 1) warnings.push('ONLY_ONE_EXCHANGE_AVAILABLE');
+  if (primaryTicker?.exchange === 'bitget') reasons.push('BITGET_PRIMARY_DATA');
   if (unavailable.length > 0) warnings.push(...unavailable.map((item) => `${item.exchange?.toUpperCase() || 'EXCHANGE'}_UNAVAILABLE`));
 
   if (liquidityScore >= 80) reasons.push('DEEP_LIQUIDITY');
@@ -224,18 +310,17 @@ export function analyzeSmartMarket({ symbol, tickers, spreadPercent = null }) {
   });
 
   let score = 45;
-  score += liquidityScore * 0.28;
+  score += liquidityScore * 0.30;
   score += Math.min(absChange, 6) * 2.0;
   score -= absChange > 8 ? (absChange - 8) * 3.5 : 0;
   score -= avgRangePercent && avgRangePercent > 12 ? (avgRangePercent - 12) * 1.8 : 0;
   score -= actualSpreadPercent && actualSpreadPercent > 0.2 ? actualSpreadPercent * 30 : 0;
   score -= riskTier === 'high' ? 8 : 0;
   score -= riskTier === 'extreme' ? 30 : 0;
-  score -= validTickers.length === 1 ? 5 : 0;
   score = Math.round(clamp(score, 0, 100));
 
   const confidence = Math.round(clamp(
-    35 + liquidityScore * 0.35 + (validTickers.length >= 2 ? 15 : 0) - (riskTier === 'high' ? 10 : 0) - (riskTier === 'extreme' ? 25 : 0),
+    40 + liquidityScore * 0.35 - (riskTier === 'high' ? 10 : 0) - (riskTier === 'extreme' ? 25 : 0),
     0,
     100
   ));
@@ -252,6 +337,13 @@ export function analyzeSmartMarket({ symbol, tickers, spreadPercent = null }) {
   });
 
   const regime = marketRegimeFromScore(score, riskTier);
+  const virtualTradePlan = buildVirtualTradePlan({
+    symbol,
+    primaryTicker,
+    smartAction,
+    riskTier,
+    confidence,
+  });
 
   return {
     symbol,
@@ -260,7 +352,10 @@ export function analyzeSmartMarket({ symbol, tickers, spreadPercent = null }) {
     regime,
     riskTier,
     directionBias,
+    primaryExchange: primaryTicker?.exchange || null,
+    primaryPrice: primaryTicker?.lastPrice || null,
     smartAction,
+    virtualTradePlan,
     metrics: {
       validExchangeCount: validTickers.length,
       avgChange,
