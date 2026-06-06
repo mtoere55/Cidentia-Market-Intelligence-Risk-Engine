@@ -1,0 +1,1 @@
+{"name":"cidentia-market-intelligence-risk-engine-backend","version":"0.1.0","private":true,"type":"module","description":"Safety-first market intelligence and risk engine backend","scripts":{"dev":"node src/server.js","start":"node src/server.js","health":"node src/cli/health.js"},"dependencies":{"express":"^4.18.3","cors":"^2.8.5","dotenv":"^16.4.5"},"devDependencies":{}}
