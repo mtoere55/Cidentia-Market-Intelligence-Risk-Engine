@@ -22,11 +22,11 @@ function dashboardHtml() {
   <style>
     :root { color-scheme: dark; }
     body { margin:0; font-family: Arial, sans-serif; background:#080b12; color:#eef3ff; }
-    .wrap { max-width:1280px; margin:0 auto; padding:28px; }
+    .wrap { max-width:1380px; margin:0 auto; padding:28px; }
     .hero { border:1px solid #1f2a44; border-radius:22px; padding:26px; background:linear-gradient(135deg,#10182a,#0b1020); box-shadow:0 16px 60px rgba(0,0,0,.35); }
     h1 { margin:0 0 8px; font-size:30px; }
     p { color:#aebbd4; line-height:1.55; }
-    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:16px; margin-top:18px; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:16px; margin-top:18px; }
     .card { border:1px solid #1f2a44; border-radius:18px; padding:18px; background:#0d1424; }
     .label { color:#8fa1c4; font-size:13px; }
     .value { font-size:24px; font-weight:700; margin-top:7px; }
@@ -37,22 +37,29 @@ function dashboardHtml() {
     code, pre { background:#050814; border:1px solid #1f2a44; border-radius:14px; color:#d7e4ff; }
     pre { padding:16px; overflow:auto; min-height:120px; max-height:360px; }
     a { color:#93c5fd; }
-    table { width:100%; border-collapse:collapse; margin-top:14px; overflow:hidden; border-radius:14px; }
-    th, td { border-bottom:1px solid #1f2a44; padding:11px 10px; text-align:left; font-size:14px; }
+    .tableWrap { overflow:auto; }
+    table { width:100%; border-collapse:collapse; margin-top:14px; overflow:hidden; border-radius:14px; min-width:1080px; }
+    th, td { border-bottom:1px solid #1f2a44; padding:11px 10px; text-align:left; font-size:13px; white-space:nowrap; }
     th { color:#8fa1c4; background:#0a1020; }
     .pill { display:inline-block; padding:5px 9px; border-radius:999px; font-weight:700; font-size:12px; }
     .pill.green { background:rgba(74,222,128,.14); color:#4ade80; }
     .pill.yellow { background:rgba(250,204,21,.14); color:#facc15; }
     .pill.red { background:rgba(251,113,133,.14); color:#fb7185; }
+    .pill.long { background:rgba(34,197,94,.14); color:#4ade80; }
+    .pill.short { background:rgba(248,113,113,.14); color:#fb7185; }
+    .pill.wait { background:rgba(250,204,21,.14); color:#facc15; }
+    .pill.avoid { background:rgba(148,163,184,.14); color:#cbd5e1; }
     .muted { color:#8fa1c4; }
     .notice { margin-top:14px; padding:12px 14px; border:1px solid #334155; border-radius:14px; color:#cbd5e1; background:#0a1020; }
+    .summary { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-top:14px; }
+    .summary div { background:#0a1020; border:1px solid #1f2a44; border-radius:14px; padding:12px; }
   </style>
 </head>
 <body>
   <div class="wrap">
     <section class="hero">
       <h1>Cidentia Market Intelligence & Risk Engine</h1>
-      <p>Güvenli demo paneli. Sistem şu anda gerçek emir açmaz. Binance ve Bitget public piyasa verisini okur, risk kilidi ve paper trading mantığıyla çalışır.</p>
+      <p>Güvenli demo paneli. v0.3 Smart Radar artık momentum, likidite, 24 saat aralık konumu, spread riski, pump/dump kovalamama ve yön eğilimi okur. Gerçek emir hâlâ kilitlidir.</p>
       <div class="grid">
         <div class="card"><div class="label">Trading Mode</div><div id="mode" class="value">loading</div></div>
         <div class="card"><div class="label">Real Trading Gate</div><div id="gate" class="value">loading</div></div>
@@ -61,7 +68,7 @@ function dashboardHtml() {
       </div>
       <p>
         <button onclick="loadStatus()">Status Oku</button>
-        <button onclick="loadScanner()">Market Scanner v0.2</button>
+        <button onclick="loadScanner()">Smart Radar v0.3</button>
         <button onclick="loadMarket('BTCUSDT')">BTCUSDT Analiz</button>
         <button onclick="loadMarket('ETHUSDT')">ETHUSDT Analiz</button>
         <button onclick="openPaperDemo()">Paper Trade Test</button>
@@ -72,8 +79,9 @@ function dashboardHtml() {
     </section>
 
     <div class="card" style="margin-top:18px;">
-      <h2>Market Scanner v0.2</h2>
-      <p>Çoklu coin taraması. Kararlar sadece demo/paper mod içindir: izlenebilir, bekle, riskli.</p>
+      <h2>Smart Radar v0.3</h2>
+      <p>Akıllı tarama: long izle, short izle, onay bekle, tepe kovalanmaz, düşen bıçak, likidite zayıf gibi kararlar üretir. Bu kararlar sadece demo/paper mod içindir.</p>
+      <div id="scannerSummary" class="summary"></div>
       <div id="scannerTable" class="muted">Scanner henüz çalışmadı.</div>
     </div>
 
@@ -121,6 +129,13 @@ function pill(regime) {
   const cls = regime === 'green' ? 'green' : regime === 'yellow' ? 'yellow' : 'red';
   return '<span class="pill ' + cls + '">' + regime + '</span>';
 }
+function actionPill(action, label) {
+  let cls = 'wait';
+  if (action === 'LONG_WATCH') cls = 'long';
+  else if (action === 'SHORT_WATCH') cls = 'short';
+  else if (action.startsWith('AVOID')) cls = 'avoid';
+  return '<span class="pill ' + cls + '">' + label + '</span>';
+}
 async function loadStatus() {
   const data = await api('/status');
   document.getElementById('mode').textContent = data.config.tradingMode;
@@ -133,22 +148,38 @@ async function loadMarket(symbol) { await api('/market/' + symbol); }
 async function loadScanner() {
   const data = await api('/scanner');
   document.getElementById('scannerCount').textContent = data.count;
+  const s = data.summary || {};
+  document.getElementById('scannerSummary').innerHTML =
+    '<div><b>Long İzle</b><br>' + (s.longWatch || 0) + '</div>' +
+    '<div><b>Short İzle</b><br>' + (s.shortWatch || 0) + '</div>' +
+    '<div><b>Bekle</b><br>' + (s.wait || 0) + '</div>' +
+    '<div><b>Kaçın</b><br>' + (s.avoid || 0) + '</div>' +
+    '<div><b>Green</b><br>' + (s.green || 0) + '</div>' +
+    '<div><b>Yellow</b><br>' + (s.yellow || 0) + '</div>' +
+    '<div><b>Red</b><br>' + (s.red || 0) + '</div>';
   const rows = data.results.map((item) => {
-    const binance = item.exchanges.find((x) => x.exchange === 'binance') || {};
-    const bitget = item.exchanges.find((x) => x.exchange === 'bitget') || {};
+    const binance = item.tickers.find((x) => x.exchange === 'binance') || {};
+    const bitget = item.tickers.find((x) => x.exchange === 'bitget') || {};
+    const metrics = item.metrics || {};
     return '<tr>' +
       '<td><b>' + item.symbol + '</b></td>' +
       '<td>' + item.score + '</td>' +
+      '<td>' + item.confidence + '</td>' +
       '<td>' + pill(item.regime) + '</td>' +
-      '<td>' + item.decision.label + '</td>' +
+      '<td>' + item.riskTier + '</td>' +
+      '<td>' + item.directionBias + '</td>' +
+      '<td>' + actionPill(item.decision.action, item.decision.label) + '</td>' +
       '<td>' + money(binance.lastPrice) + '</td>' +
       '<td>' + money(bitget.lastPrice) + '</td>' +
+      '<td>' + pct(metrics.avgChange) + '</td>' +
+      '<td>' + pct(metrics.avgRangePosition !== null && metrics.avgRangePosition !== undefined ? metrics.avgRangePosition * 100 : null) + '</td>' +
+      '<td>' + (metrics.liquidityScore ?? '-') + '</td>' +
       '<td>' + pct(item.spreadPercent) + '</td>' +
-      '<td class="muted">' + item.reasons.slice(0, 3).join(', ') + '</td>' +
+      '<td class="muted">' + item.decision.reason + '</td>' +
     '</tr>';
   }).join('');
-  document.getElementById('scannerTable').innerHTML = '<table><thead><tr><th>Coin</th><th>Score</th><th>Regime</th><th>Karar</th><th>Binance</th><th>Bitget</th><th>Spread</th><th>Sebep</th></tr></thead><tbody>' + rows + '</tbody></table>';
-  showSmall('Scanner özeti: ' + data.count + ' coin tarandı.', data.results.map(item => ({ symbol:item.symbol, score:item.score, regime:item.regime, karar:item.decision.label, reasons:item.reasons })));
+  document.getElementById('scannerTable').innerHTML = '<div class="tableWrap"><table><thead><tr><th>Coin</th><th>Score</th><th>Güven</th><th>Regime</th><th>Risk</th><th>Yön</th><th>Akıllı Karar</th><th>Binance</th><th>Bitget</th><th>24s %</th><th>Aralık Konumu</th><th>Likidite</th><th>Spread</th><th>Açıklama</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+  showSmall('Smart Radar v0.3 özeti: ' + data.count + ' coin tarandı.', data.results.map(item => ({ symbol:item.symbol, score:item.score, confidence:item.confidence, risk:item.riskTier, yon:item.directionBias, karar:item.decision.label, action:item.decision.action, neden:item.decision.reason, warnings:item.warnings })));
 }
 async function openPaperDemo() {
   await api('/paper/open', {
