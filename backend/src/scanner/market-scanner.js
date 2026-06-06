@@ -66,6 +66,8 @@ export async function scanSymbol(symbol) {
     regime: smart.regime,
     riskTier: smart.riskTier,
     directionBias: smart.directionBias,
+    primaryExchange: smart.primaryExchange,
+    primaryPrice: smart.primaryPrice,
     decision: {
       action: smart.smartAction.code,
       label: smart.smartAction.label,
@@ -73,6 +75,7 @@ export async function scanSymbol(symbol) {
       reason: smart.smartAction.explanation,
     },
     smartAction: smart.smartAction,
+    virtualTradePlan: smart.virtualTradePlan,
     metrics: smart.metrics,
     spreadPercent: smart.metrics.spreadPercent,
     reasons: smart.reasons,
@@ -98,6 +101,8 @@ export async function scanMarket(symbols = DEFAULT_SCANNER_SYMBOLS) {
           regime: 'red',
           riskTier: 'extreme',
           directionBias: 'none',
+          primaryExchange: null,
+          primaryPrice: null,
           decision: {
             action: 'SCAN_FAILED',
             label: 'tarama hatası',
@@ -108,6 +113,11 @@ export async function scanMarket(symbols = DEFAULT_SCANNER_SYMBOLS) {
             code: 'SCAN_FAILED',
             label: 'tarama hatası',
             direction: 'none',
+            explanation: error.message,
+          },
+          virtualTradePlan: {
+            enabled: false,
+            mode: 'sanal test',
             explanation: error.message,
           },
           metrics: {},
@@ -123,6 +133,7 @@ export async function scanMarket(symbols = DEFAULT_SCANNER_SYMBOLS) {
   const sorted = results.sort((a, b) => {
     const actionWeight = (item) => {
       if (item.decision.action === 'LONG_WATCH' || item.decision.action === 'SHORT_WATCH') return 20;
+      if (item.virtualTradePlan?.quality === 'sanal test uygun') return 15;
       if (item.decision.action === 'WAIT_CONFIRMATION') return 5;
       return 0;
     };
@@ -134,6 +145,7 @@ export async function scanMarket(symbols = DEFAULT_SCANNER_SYMBOLS) {
     shortWatch: sorted.filter((item) => item.decision.action === 'SHORT_WATCH').length,
     wait: sorted.filter((item) => item.decision.action.startsWith('WAIT')).length,
     avoid: sorted.filter((item) => item.decision.action.startsWith('AVOID')).length,
+    virtualReady: sorted.filter((item) => item.virtualTradePlan?.quality === 'sanal test uygun').length,
     green: sorted.filter((item) => item.regime === 'green').length,
     yellow: sorted.filter((item) => item.regime === 'yellow').length,
     red: sorted.filter((item) => item.regime === 'red').length,
@@ -141,8 +153,9 @@ export async function scanMarket(symbols = DEFAULT_SCANNER_SYMBOLS) {
 
   return {
     ok: true,
-    mode: 'smart-read-only-paper-demo',
-    version: '0.3-smart-radar',
+    mode: 'bitget-primary-smart-virtual-demo',
+    version: '0.4-bitget-smart-virtual-plan',
+    explanation: 'Sanal işlem gerçek para kullanmaz. Sistem sadece Bitget verisini ana kaynak alarak işlem fikrini test eder.',
     count: sorted.length,
     generatedAt: new Date().toISOString(),
     symbols: limitedSymbols,
