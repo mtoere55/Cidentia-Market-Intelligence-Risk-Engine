@@ -1,5 +1,5 @@
 import { getCombinedTicker } from '../exchanges/exchange-manager.js';
-import { analyzeTicker, combineExchangeAnalysis } from '../intelligence/simple-intelligence.js';
+import { analyzeSmartMarket } from '../intelligence/advanced-intelligence.js';
 
 export const DEFAULT_SCANNER_SYMBOLS = [
   'BTCUSDT',
@@ -12,31 +12,12 @@ export const DEFAULT_SCANNER_SYMBOLS = [
   'AVAXUSDT',
   'LINKUSDT',
   'TRXUSDT',
+  'TONUSDT',
+  'DOTUSDT',
+  'LTCUSDT',
+  'BCHUSDT',
+  'NEARUSDT',
 ];
-
-function tradeDecisionFromRegime(regime, score) {
-  if (regime === 'green' && score >= 70) {
-    return {
-      action: 'WATCH_HIGH_PRIORITY',
-      label: 'izlenebilir',
-      reason: 'Market score is strong, but paper/manual confirmation is still required.',
-    };
-  }
-
-  if (regime === 'yellow') {
-    return {
-      action: 'WAIT_FOR_CONFIRMATION',
-      label: 'bekle',
-      reason: 'Market is active but not clean enough for automatic action.',
-    };
-  }
-
-  return {
-    action: 'RISKY_AVOID',
-    label: 'riskli',
-    reason: 'Risk score is weak or exchange data is incomplete.',
-  };
-}
 
 function calculateSpreadPercent(tickers) {
   const validPrices = tickers
@@ -66,33 +47,43 @@ function compactTicker(ticker) {
     symbol: ticker.symbol,
     lastPrice: ticker.lastPrice,
     priceChangePercent: ticker.priceChangePercent,
+    highPrice: ticker.highPrice,
+    lowPrice: ticker.lowPrice,
     quoteVolume: ticker.quoteVolume,
   };
 }
 
 export async function scanSymbol(symbol) {
   const tickers = await getCombinedTicker(symbol);
-  const analyses = tickers.map(analyzeTicker);
-  const combined = combineExchangeAnalysis(analyses);
   const spreadPercent = calculateSpreadPercent(tickers);
-  const decision = tradeDecisionFromRegime(combined.regime, combined.score);
+  const smart = analyzeSmartMarket({ symbol, tickers, spreadPercent });
 
   return {
     symbol,
     timestamp: new Date().toISOString(),
-    score: combined.score,
-    regime: combined.regime,
-    decision,
-    spreadPercent,
-    reasons: combined.reasons,
-    exchanges: analyses,
+    score: smart.score,
+    confidence: smart.confidence,
+    regime: smart.regime,
+    riskTier: smart.riskTier,
+    directionBias: smart.directionBias,
+    decision: {
+      action: smart.smartAction.code,
+      label: smart.smartAction.label,
+      direction: smart.smartAction.direction,
+      reason: smart.smartAction.explanation,
+    },
+    smartAction: smart.smartAction,
+    metrics: smart.metrics,
+    spreadPercent: smart.metrics.spreadPercent,
+    reasons: smart.reasons,
+    warnings: smart.warnings,
     tickers: tickers.map(compactTicker),
   };
 }
 
 export async function scanMarket(symbols = DEFAULT_SCANNER_SYMBOLS) {
   const uniqueSymbols = [...new Set(symbols.map((symbol) => String(symbol).trim().toUpperCase()).filter(Boolean))];
-  const limitedSymbols = uniqueSymbols.slice(0, 20);
+  const limitedSymbols = uniqueSymbols.slice(0, 25);
 
   const results = await Promise.all(
     limitedSymbols.map(async (symbol) => {
@@ -103,25 +94,59 @@ export async function scanMarket(symbols = DEFAULT_SCANNER_SYMBOLS) {
           symbol,
           timestamp: new Date().toISOString(),
           score: 0,
+          confidence: 0,
           regime: 'red',
-          decision: tradeDecisionFromRegime('red', 0),
+          riskTier: 'extreme',
+          directionBias: 'none',
+          decision: {
+            action: 'SCAN_FAILED',
+            label: 'tarama hatası',
+            direction: 'none',
+            reason: error.message,
+          },
+          smartAction: {
+            code: 'SCAN_FAILED',
+            label: 'tarama hatası',
+            direction: 'none',
+            explanation: error.message,
+          },
+          metrics: {},
           spreadPercent: null,
-          reasons: ['SCAN_FAILED', error.message],
-          exchanges: [],
+          reasons: ['SCAN_FAILED'],
+          warnings: [error.message],
           tickers: [],
         };
       }
     })
   );
 
-  const sorted = results.sort((a, b) => b.score - a.score);
+  const sorted = results.sort((a, b) => {
+    const actionWeight = (item) => {
+      if (item.decision.action === 'LONG_WATCH' || item.decision.action === 'SHORT_WATCH') return 20;
+      if (item.decision.action === 'WAIT_CONFIRMATION') return 5;
+      return 0;
+    };
+    return (b.score + actionWeight(b)) - (a.score + actionWeight(a));
+  });
+
+  const summary = {
+    longWatch: sorted.filter((item) => item.decision.action === 'LONG_WATCH').length,
+    shortWatch: sorted.filter((item) => item.decision.action === 'SHORT_WATCH').length,
+    wait: sorted.filter((item) => item.decision.action.startsWith('WAIT')).length,
+    avoid: sorted.filter((item) => item.decision.action.startsWith('AVOID')).length,
+    green: sorted.filter((item) => item.regime === 'green').length,
+    yellow: sorted.filter((item) => item.regime === 'yellow').length,
+    red: sorted.filter((item) => item.regime === 'red').length,
+  };
 
   return {
     ok: true,
-    mode: 'read-only-paper-demo',
+    mode: 'smart-read-only-paper-demo',
+    version: '0.3-smart-radar',
     count: sorted.length,
     generatedAt: new Date().toISOString(),
     symbols: limitedSymbols,
+    summary,
     results: sorted,
   };
 }
