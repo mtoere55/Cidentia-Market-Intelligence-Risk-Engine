@@ -40,11 +40,7 @@ function calculateRangePosition(ticker) {
   const last = Number(ticker.lastPrice);
   const high = Number(ticker.highPrice);
   const low = Number(ticker.lowPrice);
-
-  if (!Number.isFinite(last) || !Number.isFinite(high) || !Number.isFinite(low) || high <= low) {
-    return null;
-  }
-
+  if (!Number.isFinite(last) || !Number.isFinite(high) || !Number.isFinite(low) || high <= low) return null;
   return clamp((last - low) / (high - low), 0, 1);
 }
 
@@ -52,11 +48,7 @@ function calculateRangePercent(ticker) {
   const last = Number(ticker.lastPrice);
   const high = Number(ticker.highPrice);
   const low = Number(ticker.lowPrice);
-
-  if (!Number.isFinite(last) || !Number.isFinite(high) || !Number.isFinite(low) || last <= 0 || high <= low) {
-    return null;
-  }
-
+  if (!Number.isFinite(last) || !Number.isFinite(high) || !Number.isFinite(low) || last <= 0 || high <= low) return null;
   return ((high - low) / last) * 100;
 }
 
@@ -77,110 +69,55 @@ function marketRegimeFromScore(score, riskTier) {
   return 'red';
 }
 
-function riskTierFromMetrics({ absChange, avgRangePercent, spreadPercent, liquidityScore }) {
-  if ((spreadPercent !== null && spreadPercent > 0.8) || absChange >= 15 || (avgRangePercent !== null && avgRangePercent >= 22)) {
-    return 'extreme';
-  }
-
-  if ((spreadPercent !== null && spreadPercent > 0.35) || absChange >= 9 || (avgRangePercent !== null && avgRangePercent >= 14) || liquidityScore < 35) {
-    return 'high';
-  }
-
-  if (absChange >= 4 || (avgRangePercent !== null && avgRangePercent >= 7) || liquidityScore < 55) {
-    return 'medium';
-  }
-
+function riskTierFromMetrics({ absChange, avgRangePercent, spreadPercent, liquidityScore, whaleRisk }) {
+  if (whaleRisk === 'yüksek' || (spreadPercent !== null && spreadPercent > 0.8) || absChange >= 15 || (avgRangePercent !== null && avgRangePercent >= 22)) return 'extreme';
+  if (whaleRisk === 'şüpheli' || (spreadPercent !== null && spreadPercent > 0.35) || absChange >= 9 || (avgRangePercent !== null && avgRangePercent >= 14) || liquidityScore < 35) return 'high';
+  if (absChange >= 4 || (avgRangePercent !== null && avgRangePercent >= 7) || liquidityScore < 55) return 'medium';
   return 'low';
 }
 
+function trendStrengthFromMetrics({ absChange, liquidityScore, avgRangePosition }) {
+  let value = 0;
+  value += Math.min(absChange, 12) * 6;
+  value += liquidityScore * 0.25;
+  if (avgRangePosition !== null && (avgRangePosition > 0.82 || avgRangePosition < 0.18)) value += 10;
+  value = Math.round(clamp(value, 0, 100));
+  let label = 'zayıf';
+  if (value >= 80) label = 'çok güçlü';
+  else if (value >= 62) label = 'güçlü';
+  else if (value >= 42) label = 'orta';
+  return { value, label };
+}
+
+function whaleRiskFromMetrics({ absChange, avgRangePercent, avgRangePosition, liquidityScore }) {
+  const nearEdge = avgRangePosition !== null && (avgRangePosition > 0.9 || avgRangePosition < 0.1);
+  if (absChange >= 18 || (avgRangePercent !== null && avgRangePercent >= 26)) {
+    return { level: 'yüksek', score: 90, explanation: 'Hareket aşırı büyük; likidite avı veya sert manipülasyon riski olabilir.' };
+  }
+  if ((absChange >= 10 && nearEdge) || (avgRangePercent !== null && avgRangePercent >= 16 && liquidityScore < 60)) {
+    return { level: 'şüpheli', score: 70, explanation: 'Fiyat 24 saat sınır bölgesinde ve hareket sert; balina/stop avı riski izlenmeli.' };
+  }
+  if (absChange >= 7 || (avgRangePercent !== null && avgRangePercent >= 11)) {
+    return { level: 'dikkat', score: 45, explanation: 'Hareket canlı; ani ters dönüş ihtimali var.' };
+  }
+  return { level: 'normal', score: 20, explanation: 'Aşırı balina riski sinyali yok.' };
+}
+
 function smartActionFromMetrics({ avgChange, absChange, avgRangePosition, liquidityScore, spreadPercent, riskTier, confidence }) {
-  if (liquidityScore < 35) {
-    return {
-      code: 'AVOID_LOW_LIQUIDITY',
-      label: 'likidite zayıf',
-      direction: 'none',
-      explanation: 'Hacim zayıf; manipülasyon ve slippage riski yüksek.',
-    };
-  }
-
-  if (spreadPercent !== null && spreadPercent > 0.35) {
-    return {
-      code: 'WAIT_SPREAD_RISK',
-      label: 'spread bekle',
-      direction: 'none',
-      explanation: 'Borsalar arası fiyat farkı fazla; önce fiyat dengesi beklenmeli.',
-    };
-  }
-
-  if (riskTier === 'extreme') {
-    return {
-      code: 'AVOID_EXTREME_MOVE',
-      label: 'çok riskli',
-      direction: 'none',
-      explanation: 'Hareket aşırı; sistem kovalamaz, önce sakinleşme bekler.',
-    };
-  }
-
-  if (avgChange > 4 && avgRangePosition !== null && avgRangePosition > 0.88) {
-    return {
-      code: 'AVOID_CHASE_TOP',
-      label: 'tepe kovalanmaz',
-      direction: 'none',
-      explanation: 'Fiyat 24s tepeye çok yakın; FOMO/pump kovalamama kuralı devrede.',
-    };
-  }
-
-  if (avgChange < -4 && avgRangePosition !== null && avgRangePosition < 0.12) {
-    return {
-      code: 'AVOID_FALLING_KNIFE',
-      label: 'düşen bıçak',
-      direction: 'none',
-      explanation: 'Fiyat 24s dip bölgesinde sert düşmüş; tepki gelmeden işlem yok.',
-    };
-  }
-
-  if (avgChange >= 1.2 && avgChange <= 7.5 && (avgRangePosition === null || (avgRangePosition >= 0.35 && avgRangePosition <= 0.82)) && confidence >= 45) {
-    return {
-      code: 'LONG_WATCH',
-      label: 'long izle',
-      direction: 'long',
-      explanation: 'Momentum pozitif ama aşırı tepede değil; sadece sanal/manual izleme adayı.',
-    };
-  }
-
-  if (avgChange <= -1.2 && avgChange >= -7.5 && (avgRangePosition === null || (avgRangePosition >= 0.18 && avgRangePosition <= 0.65)) && confidence >= 45) {
-    return {
-      code: 'SHORT_WATCH',
-      label: 'short izle',
-      direction: 'short',
-      explanation: 'Momentum negatif ama panik dipte değil; sadece sanal/manual izleme adayı.',
-    };
-  }
-
-  if (absChange < 1.2) {
-    return {
-      code: 'WAIT_NO_MOMENTUM',
-      label: 'momentum yok',
-      direction: 'none',
-      explanation: 'Yön zayıf; sistem acele etmez.',
-    };
-  }
-
-  return {
-    code: 'WAIT_CONFIRMATION',
-    label: 'onay bekle',
-    direction: 'none',
-    explanation: 'Veri ilginç ama işlem için yeterince temiz değil.',
-  };
+  if (liquidityScore < 35) return { code: 'AVOID_LOW_LIQUIDITY', label: 'likidite zayıf', direction: 'none', explanation: 'Hacim zayıf; manipülasyon ve slippage riski yüksek.' };
+  if (spreadPercent !== null && spreadPercent > 0.35) return { code: 'WAIT_SPREAD_RISK', label: 'spread bekle', direction: 'none', explanation: 'Borsalar arası fiyat farkı fazla; önce fiyat dengesi beklenmeli.' };
+  if (riskTier === 'extreme') return { code: 'AVOID_EXTREME_MOVE', label: 'çok riskli', direction: 'none', explanation: 'Hareket aşırı; sistem kovalamaz, önce sakinleşme bekler.' };
+  if (avgChange > 4 && avgRangePosition !== null && avgRangePosition > 0.88) return { code: 'AVOID_CHASE_TOP', label: 'tepe kovalanmaz', direction: 'none', explanation: 'Fiyat 24s tepeye çok yakın; FOMO/pump kovalamama kuralı devrede.' };
+  if (avgChange < -4 && avgRangePosition !== null && avgRangePosition < 0.12) return { code: 'AVOID_FALLING_KNIFE', label: 'düşen bıçak', direction: 'none', explanation: 'Fiyat 24s dip bölgesinde sert düşmüş; tepki gelmeden işlem yok.' };
+  if (avgChange >= 1.2 && avgChange <= 7.5 && (avgRangePosition === null || (avgRangePosition >= 0.35 && avgRangePosition <= 0.82)) && confidence >= 45) return { code: 'LONG_WATCH', label: 'long izle', direction: 'long', explanation: 'Momentum pozitif ama aşırı tepede değil; sadece sanal/manual izleme adayı.' };
+  if (avgChange <= -1.2 && avgChange >= -7.5 && (avgRangePosition === null || (avgRangePosition >= 0.18 && avgRangePosition <= 0.65)) && confidence >= 45) return { code: 'SHORT_WATCH', label: 'short izle', direction: 'short', explanation: 'Momentum negatif ama panik dipte değil; sadece sanal/manual izleme adayı.' };
+  if (absChange < 1.2) return { code: 'WAIT_NO_MOMENTUM', label: 'momentum yok', direction: 'none', explanation: 'Yön zayıf; sistem acele etmez.' };
+  return { code: 'WAIT_CONFIRMATION', label: 'onay bekle', direction: 'none', explanation: 'Veri ilginç ama işlem için yeterince temiz değil.' };
 }
 
 function buildVirtualTradePlan({ symbol, primaryTicker, smartAction, riskTier, confidence }) {
   if (!primaryTicker || !['long', 'short'].includes(smartAction.direction)) {
-    return {
-      enabled: false,
-      mode: 'sanal test',
-      explanation: 'Bu coin için şu an sanal işlem planı üretilmedi; sistem beklemeyi tercih ediyor.',
-    };
+    return { enabled: false, mode: 'sanal test', explanation: 'Bu coin için şu an sanal işlem planı üretilmedi; sistem beklemeyi tercih ediyor.' };
   }
 
   const last = Number(primaryTicker.lastPrice);
@@ -193,30 +130,26 @@ function buildVirtualTradePlan({ symbol, primaryTicker, smartAction, riskTier, c
   let entryLow;
   let entryHigh;
   let stopLoss;
-  let takeProfit1;
-  let takeProfit2;
 
   if (side === 'long') {
     entryLow = last - safeRange * 0.08;
     entryHigh = last + safeRange * 0.03;
-    stopLoss = Math.min(low - safeRange * 0.05, last - safeRange * 0.28);
-    takeProfit1 = last + safeRange * 0.22;
-    takeProfit2 = last + safeRange * 0.42;
+    stopLoss = Math.min(low - safeRange * 0.04, last - safeRange * 0.22);
   } else {
     entryLow = last - safeRange * 0.03;
     entryHigh = last + safeRange * 0.08;
-    stopLoss = Math.max(high + safeRange * 0.05, last + safeRange * 0.28);
-    takeProfit1 = last - safeRange * 0.22;
-    takeProfit2 = last - safeRange * 0.42;
+    stopLoss = Math.max(high + safeRange * 0.04, last + safeRange * 0.22);
   }
 
   const entryMid = (entryLow + entryHigh) / 2;
   const risk = Math.abs(entryMid - stopLoss);
-  const reward = Math.abs(takeProfit1 - entryMid);
-  const rr = risk > 0 ? reward / risk : null;
+  const takeProfit1 = side === 'long' ? entryMid + risk * 1.5 : entryMid - risk * 1.5;
+  const takeProfit2 = side === 'long' ? entryMid + risk * 2.4 : entryMid - risk * 2.4;
+  const rr = risk > 0 ? Math.abs(takeProfit1 - entryMid) / risk : null;
 
   let quality = 'sadece izle';
-  if (confidence >= 65 && rr !== null && rr >= 0.8 && riskTier !== 'high') quality = 'sanal test uygun';
+  if (confidence >= 65 && rr !== null && rr >= 1.5 && riskTier !== 'high' && riskTier !== 'extreme') quality = 'sanal test uygun';
+  if (confidence >= 75 && rr !== null && rr >= 2 && riskTier === 'low') quality = 'güçlü aday';
   if (confidence < 45 || riskTier === 'extreme') quality = 'bekle';
 
   return {
@@ -224,10 +157,7 @@ function buildVirtualTradePlan({ symbol, primaryTicker, smartAction, riskTier, c
     mode: 'sanal test',
     dataSource: primaryTicker.exchange || 'bitget',
     side,
-    entryZone: {
-      from: roundPrice(Math.min(entryLow, entryHigh)),
-      to: roundPrice(Math.max(entryLow, entryHigh)),
-    },
+    entryZone: { from: roundPrice(Math.min(entryLow, entryHigh)), to: roundPrice(Math.max(entryLow, entryHigh)) },
     stopLoss: roundPrice(stopLoss),
     takeProfit1: roundPrice(takeProfit1),
     takeProfit2: roundPrice(takeProfit2),
@@ -253,26 +183,12 @@ export function analyzeSmartMarket({ symbol, tickers, spreadPercent = null }) {
       riskTier: 'extreme',
       directionBias: 'none',
       primaryExchange: null,
-      smartAction: {
-        code: 'NO_MARKET_DATA',
-        label: 'veri yok',
-        direction: 'none',
-        explanation: 'Hiçbir borsadan geçerli fiyat alınamadı.',
-      },
-      virtualTradePlan: {
-        enabled: false,
-        mode: 'sanal test',
-        explanation: 'Veri olmadığı için sanal işlem planı üretilmedi.',
-      },
-      metrics: {
-        validExchangeCount: 0,
-        avgChange: null,
-        absChange: null,
-        avgRangePosition: null,
-        avgRangePercent: null,
-        liquidityScore: 0,
-        spreadPercent,
-      },
+      primaryPrice: null,
+      smartAction: { code: 'NO_MARKET_DATA', label: 'veri yok', direction: 'none', explanation: 'Hiçbir borsadan geçerli fiyat alınamadı.' },
+      virtualTradePlan: { enabled: false, mode: 'sanal test', explanation: 'Veri olmadığı için sanal işlem planı üretilmedi.' },
+      trendStrength: { value: 0, label: 'zayıf' },
+      whaleRisk: { level: 'bilinmiyor', score: 0, explanation: 'Veri yok.' },
+      metrics: { validExchangeCount: 0, avgChange: null, absChange: null, avgRangePosition: null, avgRangePercent: null, liquidityScore: 0, spreadPercent },
       reasons: ['NO_VALID_TICKER'],
       warnings: unavailable.map((item) => `${item.exchange}: ${item.error}`),
     };
@@ -285,65 +201,41 @@ export function analyzeSmartMarket({ symbol, tickers, spreadPercent = null }) {
   const avgRangePercent = average(analysisTickers.map(calculateRangePercent));
   const liquidityScore = Math.round(average(analysisTickers.map((ticker) => liquidityScoreFromQuoteVolume(ticker.quoteVolume))) || 0);
   const actualSpreadPercent = spreadPercent ?? calculateSpreadPercent(validTickers);
+  const trendStrength = trendStrengthFromMetrics({ absChange, liquidityScore, avgRangePosition });
+  const whaleRisk = whaleRiskFromMetrics({ absChange, avgRangePercent, avgRangePosition, liquidityScore });
 
   if (primaryTicker?.exchange === 'bitget') reasons.push('BITGET_PRIMARY_DATA');
   if (unavailable.length > 0) warnings.push(...unavailable.map((item) => `${item.exchange?.toUpperCase() || 'EXCHANGE'}_UNAVAILABLE`));
-
   if (liquidityScore >= 80) reasons.push('DEEP_LIQUIDITY');
   else if (liquidityScore >= 60) reasons.push('GOOD_LIQUIDITY');
   else if (liquidityScore < 35) reasons.push('LOW_LIQUIDITY');
-
   if (avgChange > 2) reasons.push('POSITIVE_MOMENTUM');
   if (avgChange < -2) reasons.push('NEGATIVE_MOMENTUM');
   if (absChange >= 9) reasons.push('OVEREXTENDED_MOVE');
-
   if (avgRangePosition !== null && avgRangePosition > 0.85) reasons.push('NEAR_24H_HIGH');
   if (avgRangePosition !== null && avgRangePosition < 0.15) reasons.push('NEAR_24H_LOW');
-
   if (actualSpreadPercent !== null && actualSpreadPercent > 0.35) reasons.push('EXCHANGE_SPREAD_RISK');
+  if (whaleRisk.level !== 'normal') reasons.push(`WHALE_RISK_${whaleRisk.level}`);
 
-  const riskTier = riskTierFromMetrics({
-    absChange,
-    avgRangePercent,
-    spreadPercent: actualSpreadPercent,
-    liquidityScore,
-  });
+  const riskTier = riskTierFromMetrics({ absChange, avgRangePercent, spreadPercent: actualSpreadPercent, liquidityScore, whaleRisk: whaleRisk.level });
 
   let score = 45;
   score += liquidityScore * 0.30;
   score += Math.min(absChange, 6) * 2.0;
+  score += trendStrength.value * 0.08;
   score -= absChange > 8 ? (absChange - 8) * 3.5 : 0;
   score -= avgRangePercent && avgRangePercent > 12 ? (avgRangePercent - 12) * 1.8 : 0;
   score -= actualSpreadPercent && actualSpreadPercent > 0.2 ? actualSpreadPercent * 30 : 0;
+  score -= whaleRisk.level === 'yüksek' ? 25 : whaleRisk.level === 'şüpheli' ? 12 : 0;
   score -= riskTier === 'high' ? 8 : 0;
   score -= riskTier === 'extreme' ? 30 : 0;
   score = Math.round(clamp(score, 0, 100));
 
-  const confidence = Math.round(clamp(
-    40 + liquidityScore * 0.35 - (riskTier === 'high' ? 10 : 0) - (riskTier === 'extreme' ? 25 : 0),
-    0,
-    100
-  ));
-
+  const confidence = Math.round(clamp(40 + liquidityScore * 0.35 + trendStrength.value * 0.08 - (riskTier === 'high' ? 10 : 0) - (riskTier === 'extreme' ? 25 : 0), 0, 100));
   const directionBias = avgChange > 1.2 ? 'long' : avgChange < -1.2 ? 'short' : 'neutral';
-  const smartAction = smartActionFromMetrics({
-    avgChange,
-    absChange,
-    avgRangePosition,
-    liquidityScore,
-    spreadPercent: actualSpreadPercent,
-    riskTier,
-    confidence,
-  });
-
+  const smartAction = smartActionFromMetrics({ avgChange, absChange, avgRangePosition, liquidityScore, spreadPercent: actualSpreadPercent, riskTier, confidence });
   const regime = marketRegimeFromScore(score, riskTier);
-  const virtualTradePlan = buildVirtualTradePlan({
-    symbol,
-    primaryTicker,
-    smartAction,
-    riskTier,
-    confidence,
-  });
+  const virtualTradePlan = buildVirtualTradePlan({ symbol, primaryTicker, smartAction, riskTier, confidence });
 
   return {
     symbol,
@@ -354,17 +246,11 @@ export function analyzeSmartMarket({ symbol, tickers, spreadPercent = null }) {
     directionBias,
     primaryExchange: primaryTicker?.exchange || null,
     primaryPrice: primaryTicker?.lastPrice || null,
+    trendStrength,
+    whaleRisk,
     smartAction,
     virtualTradePlan,
-    metrics: {
-      validExchangeCount: validTickers.length,
-      avgChange,
-      absChange,
-      avgRangePosition,
-      avgRangePercent,
-      liquidityScore,
-      spreadPercent: actualSpreadPercent,
-    },
+    metrics: { validExchangeCount: validTickers.length, avgChange, absChange, avgRangePosition, avgRangePercent, liquidityScore, spreadPercent: actualSpreadPercent, trendStrength, whaleRisk },
     reasons,
     warnings,
   };
