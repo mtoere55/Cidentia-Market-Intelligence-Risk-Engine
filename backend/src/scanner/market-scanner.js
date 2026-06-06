@@ -1,4 +1,4 @@
-import { getCombinedTicker } from '../exchanges/exchange-manager.js';
+import { getBitgetTopSymbols, getCombinedTicker } from '../exchanges/exchange-manager.js';
 import { analyzeSmartMarket } from '../intelligence/advanced-intelligence.js';
 
 export const DEFAULT_SCANNER_SYMBOLS = [
@@ -53,12 +53,81 @@ function compactTicker(ticker) {
   };
 }
 
-export async function scanSymbol(symbol) {
+function opportunityTier(item) {
+  const rr = Number(item.virtualTradePlan?.riskRewardToTp1 || 0);
+  const confidence = Number(item.confidence || 0);
+  if (item.virtualTradePlan?.quality === 'sanal test uygun' && rr >= 1.5 && confidence >= 65) return 'güçlü aday';
+  if (item.virtualTradePlan?.quality === 'sanal test uygun') return 'sanal aday';
+  if (rr > 0 && rr < 1) return 'risk/ödül zayıf';
+  if (item.decision?.action === 'LONG_WATCH' || item.decision?.action === 'SHORT_WATCH') return 'izle';
+  return 'bekle';
+}
+
+function moneyManagementPlan(item, accountSizeEur = 100, riskPercent = 2) {
+  const plan = item.virtualTradePlan;
+  if (!plan?.enabled || !plan.entryZone || !plan.stopLoss) {
+    return {
+      enabled: false,
+      explanation: 'Sanal para yönetimi için uygun giriş/stop planı yok.',
+    };
+  }
+
+  const entryMid = (Number(plan.entryZone.from) + Number(plan.entryZone.to)) / 2;
+  const stop = Number(plan.stopLoss);
+  const stopDistancePercent = Math.abs(entryMid - stop) / entryMid;
+  const maxRiskEur = Number(accountSizeEur) * (Number(riskPercent) / 100);
+  const suggestedPositionEur = stopDistancePercent > 0 ? maxRiskEur / stopDistancePercent : 0;
+  const cappedPositionEur = Math.max(0, Math.min(suggestedPositionEur, Number(accountSizeEur)));
+
+  return {
+    enabled: true,
+    accountSizeEur: Number(accountSizeEur),
+    riskPercent: Number(riskPercent),
+    maxRiskEur: Number(maxRiskEur.toFixed(2)),
+    stopDistancePercent: Number((stopDistancePercent * 100).toFixed(2)),
+    suggestedPositionEur: Number(cappedPositionEur.toFixed(2)),
+    explanation: 'Bu gerçek emir değildir. Hesap, sanal testte en fazla kaç euro riske gireceğini gösterir.',
+  };
+}
+
+function buildTopLists(results) {
+  const ranked = [...results].sort((a, b) => {
+    const rrA = Number(a.virtualTradePlan?.riskRewardToTp1 || 0);
+    const rrB = Number(b.virtualTradePlan?.riskRewardToTp1 || 0);
+    return (b.score + b.confidence + rrB * 20) - (a.score + a.confidence + rrA * 20);
+  });
+
+  return {
+    topOpportunities: ranked
+      .filter((item) => item.decision.action === 'LONG_WATCH' || item.decision.action === 'SHORT_WATCH')
+      .slice(0, 5)
+      .map((item) => ({
+        symbol: item.symbol,
+        score: item.score,
+        confidence: item.confidence,
+        direction: item.directionBias,
+        risk: item.riskTier,
+        rr: item.virtualTradePlan?.riskRewardToTp1 ?? null,
+        plan: opportunityTier(item),
+      })),
+    highestRisk: ranked
+      .filter((item) => item.riskTier === 'high' || item.riskTier === 'extreme' || item.decision.action.startsWith('AVOID'))
+      .slice(0, 5)
+      .map((item) => ({
+        symbol: item.symbol,
+        score: item.score,
+        direction: item.directionBias,
+        risk: item.riskTier,
+        decision: item.decision.label,
+      })),
+  };
+}
+
+export async function scanSymbol(symbol, moneyOptions = {}) {
   const tickers = await getCombinedTicker(symbol);
   const spreadPercent = calculateSpreadPercent(tickers);
   const smart = analyzeSmartMarket({ symbol, tickers, spreadPercent });
-
-  return {
+  const baseItem = {
     symbol,
     timestamp: new Date().toISOString(),
     score: smart.score,
@@ -82,16 +151,59 @@ export async function scanSymbol(symbol) {
     warnings: smart.warnings,
     tickers: tickers.map(compactTicker),
   };
+
+  return {
+    ...baseItem,
+    opportunityTier: opportunityTier(baseItem),
+    moneyManagement: moneyManagementPlan(baseItem, moneyOptions.accountSizeEur, moneyOptions.riskPercent),
+  };
 }
 
-export async function scanMarket(symbols = DEFAULT_SCANNER_SYMBOLS) {
-  const uniqueSymbols = [...new Set(symbols.map((symbol) => String(symbol).trim().toUpperCase()).filter(Boolean))];
-  const limitedSymbols = uniqueSymbols.slice(0, 25);
+async function resolveSymbols({ symbols, mode, limit }) {
+  if (Array.isArray(symbols) && symbols.length > 0) {
+    return {
+      source: 'custom-symbols',
+      symbols,
+    };
+  }
+
+  if (mode === 'top-bitget') {
+    try {
+      const topSymbols = await getBitgetTopSymbols(limit);
+      return {
+        source: 'bitget-top-volume-usdt',
+        symbols: topSymbols,
+      };
+    } catch (error) {
+      return {
+        source: 'fallback-default-symbols',
+        symbols: DEFAULT_SCANNER_SYMBOLS,
+        warning: error.message,
+      };
+    }
+  }
+
+  return {
+    source: 'default-fixed-symbols',
+    symbols: DEFAULT_SCANNER_SYMBOLS,
+  };
+}
+
+export async function scanMarket(options = {}) {
+  const inputSymbols = Array.isArray(options.symbols) ? options.symbols : [];
+  const mode = options.mode || 'top-bitget';
+  const limit = Math.max(1, Math.min(Number(options.limit) || 40, 80));
+  const accountSizeEur = Number(options.accountSizeEur || 100);
+  const riskPercent = Number(options.riskPercent || 2);
+
+  const resolved = await resolveSymbols({ symbols: inputSymbols, mode, limit });
+  const uniqueSymbols = [...new Set(resolved.symbols.map((symbol) => String(symbol).trim().toUpperCase()).filter(Boolean))];
+  const limitedSymbols = uniqueSymbols.slice(0, limit);
 
   const results = await Promise.all(
     limitedSymbols.map(async (symbol) => {
       try {
-        return await scanSymbol(symbol);
+        return await scanSymbol(symbol, { accountSizeEur, riskPercent });
       } catch (error) {
         return {
           symbol,
@@ -120,6 +232,8 @@ export async function scanMarket(symbols = DEFAULT_SCANNER_SYMBOLS) {
             mode: 'sanal test',
             explanation: error.message,
           },
+          opportunityTier: 'tarama hatası',
+          moneyManagement: { enabled: false, explanation: error.message },
           metrics: {},
           spreadPercent: null,
           reasons: ['SCAN_FAILED'],
@@ -132,12 +246,13 @@ export async function scanMarket(symbols = DEFAULT_SCANNER_SYMBOLS) {
 
   const sorted = results.sort((a, b) => {
     const actionWeight = (item) => {
+      if (item.opportunityTier === 'güçlü aday') return 45;
+      if (item.opportunityTier === 'sanal aday') return 30;
       if (item.decision.action === 'LONG_WATCH' || item.decision.action === 'SHORT_WATCH') return 20;
-      if (item.virtualTradePlan?.quality === 'sanal test uygun') return 15;
       if (item.decision.action === 'WAIT_CONFIRMATION') return 5;
       return 0;
     };
-    return (b.score + actionWeight(b)) - (a.score + actionWeight(a));
+    return (b.score + b.confidence + actionWeight(b)) - (a.score + a.confidence + actionWeight(a));
   });
 
   const summary = {
@@ -146,6 +261,7 @@ export async function scanMarket(symbols = DEFAULT_SCANNER_SYMBOLS) {
     wait: sorted.filter((item) => item.decision.action.startsWith('WAIT')).length,
     avoid: sorted.filter((item) => item.decision.action.startsWith('AVOID')).length,
     virtualReady: sorted.filter((item) => item.virtualTradePlan?.quality === 'sanal test uygun').length,
+    strongCandidates: sorted.filter((item) => item.opportunityTier === 'güçlü aday').length,
     green: sorted.filter((item) => item.regime === 'green').length,
     yellow: sorted.filter((item) => item.regime === 'yellow').length,
     red: sorted.filter((item) => item.regime === 'red').length,
@@ -153,13 +269,21 @@ export async function scanMarket(symbols = DEFAULT_SCANNER_SYMBOLS) {
 
   return {
     ok: true,
-    mode: 'bitget-primary-smart-virtual-demo',
-    version: '0.4-bitget-smart-virtual-plan',
-    explanation: 'Sanal işlem gerçek para kullanmaz. Sistem sadece Bitget verisini ana kaynak alarak işlem fikrini test eder.',
+    mode: 'bitget-dynamic-market-smart-demo',
+    version: '0.6-dynamic-bitget-opportunity-engine',
+    explanation: 'Sistem varsayılan olarak Bitget USDT piyasasında hacme göre en güçlü coinleri seçer. Sanal işlem gerçek para kullanmaz.',
+    scannerSource: resolved.source,
+    scannerWarning: resolved.warning || null,
+    accountModel: {
+      accountSizeEur,
+      riskPercent,
+      explanation: 'Para yönetimi hesabı sanaldır. Gerçek borsa emri açmaz.',
+    },
     count: sorted.length,
     generatedAt: new Date().toISOString(),
     symbols: limitedSymbols,
     summary,
+    topLists: buildTopLists(sorted),
     results: sorted,
   };
 }
