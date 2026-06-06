@@ -37,6 +37,9 @@ function dashboardHtml() {
     button.secondary { background:#334155; } button.dangerBtn { background:#9f1239; }
     a { color:#93c5fd; }
     .notice { margin-top:14px; padding:12px 14px; border:1px solid #334155; border-radius:14px; color:#cbd5e1; background:#0a1020; }
+    .help { margin-top:18px; display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:10px; }
+    .help div { background:#0a1020; border:1px solid #1f2a44; border-radius:14px; padding:12px; color:#cbd5e1; line-height:1.45; }
+    .help b { color:#fff; }
     .summary { display:grid; grid-template-columns:repeat(auto-fit,minmax(145px,1fr)); gap:10px; margin-top:14px; }
     .summary div { background:#0a1020; border:1px solid #1f2a44; border-radius:14px; padding:12px; }
     .tableWrap { overflow:auto; }
@@ -60,7 +63,7 @@ function dashboardHtml() {
   <div class="wrap">
     <section class="hero">
       <h1>Cidentia Market Intelligence & Risk Engine</h1>
-      <p>Bitget odaklı güvenli demo paneli. v0.4 artık sanal işlem planı üretir: giriş bölgesi, stop, kar alma hedefleri ve risk/ödül hesabı. Gerçek emir hâlâ kilitlidir.</p>
+      <p>Bitget odaklı güvenli demo paneli. v0.5 artık daha açık Türkçe anlatır: sanal işlem, giriş bölgesi, stop, kar hedefleri ve risk/ödül hesabı. Gerçek emir hâlâ kilitlidir.</p>
       <div class="grid">
         <div class="card"><div class="label">Trading Mode</div><div id="mode" class="value">loading</div></div>
         <div class="card"><div class="label">Real Trading Gate</div><div id="gate" class="value">loading</div></div>
@@ -69,7 +72,7 @@ function dashboardHtml() {
       </div>
       <p>
         <button onclick="loadStatus()">Status Oku</button>
-        <button onclick="loadScanner()">Bitget Smart Radar v0.4</button>
+        <button onclick="loadScanner()">Bitget Smart Radar v0.5</button>
         <button onclick="loadMarket('BTCUSDT')">BTCUSDT Analiz</button>
         <button onclick="loadMarket('ETHUSDT')">ETHUSDT Analiz</button>
         <button onclick="openVirtualDemo()">Sanal İşlem Test</button>
@@ -77,10 +80,18 @@ function dashboardHtml() {
         <button class="secondary" onclick="clearOutput()">Çıktıyı Temizle</button>
       </p>
       <div class="notice">Sanal işlem = gerçek para yok. Sistem sadece “sanki işlem açmış gibi” test kaydı tutar. Binance Almanya/Vercel tarafında kısıtlanabilir; bu sürüm Bitget verisini ana kaynak alır.</div>
+      <div class="help">
+        <div><b>Sanal işlem</b><br>Gerçek emir açmaz. Sadece fikri test eder. Para riske girmez.</div>
+        <div><b>Giriş bölgesi</b><br>Sistem “fiyat bu alana gelirse takip et” dediği alandır.</div>
+        <div><b>Stop</b><br>Fikir yanlış çıkarsa sanal işlem burada zarar keser.</div>
+        <div><b>Kar 1 / Kar 2</b><br>Fikir doğru giderse ilk ve ikinci sanal kar alma hedefidir.</div>
+        <div><b>R/R</b><br>Risk/ödül oranı. 1 altı zayıf, 1 üstü daha sağlıklı kabul edilir.</div>
+        <div><b>Short izle / Long izle</b><br>Hemen işlem aç demek değildir. Sadece yönü takip et demektir.</div>
+      </div>
     </section>
 
     <div class="card" style="margin-top:18px;">
-      <h2>Bitget Smart Radar v0.4</h2>
+      <h2>Bitget Smart Radar v0.5</h2>
       <p>Akıllı tarama: yön, risk, güven, likidite, giriş bölgesi, stop, kar alma ve sanal işlem uygunluğu üretir. Bunlar yatırım tavsiyesi değil; sadece güvenli test verisidir.</p>
       <div id="scannerSummary" class="summary"></div>
       <div id="scannerTable" class="muted">Scanner henüz çalışmadı.</div>
@@ -120,7 +131,20 @@ function money(value) { if (value === null || value === undefined || Number.isNa
 function pct(value) { if (value === null || value === undefined || Number.isNaN(Number(value))) return '-'; return Number(value).toFixed(2) + '%'; }
 function regimePill(regime) { const cls = regime === 'green' ? 'green' : regime === 'yellow' ? 'yellow' : 'red'; return '<span class="pill ' + cls + '">' + regime + '</span>'; }
 function actionPill(action, label) { let cls = 'wait'; if (action === 'LONG_WATCH') cls = 'long'; else if (action === 'SHORT_WATCH') cls = 'short'; else if (String(action || '').startsWith('AVOID')) cls = 'avoid'; return '<span class="pill ' + cls + '">' + label + '</span>'; }
-function planPill(plan) { if (!plan || !plan.enabled) return '<span class="pill avoid">yok</span>'; const cls = plan.quality === 'sanal test uygun' ? 'ready' : 'wait'; return '<span class="pill ' + cls + '">' + plan.quality + '</span>'; }
+function readablePlanQuality(plan) {
+  if (!plan || !plan.enabled) return 'yok';
+  if (plan.quality === 'sanal test uygun') return 'sanal test uygun';
+  if (plan.riskRewardToTp1 !== null && plan.riskRewardToTp1 !== undefined && Number(plan.riskRewardToTp1) < 1) return 'risk/ödül zayıf';
+  if (plan.quality === 'sadece izle') return 'işlem açma, takip et';
+  return plan.quality || 'bekle';
+}
+function planPill(plan) {
+  const text = readablePlanQuality(plan);
+  if (text === 'yok') return '<span class="pill avoid">yok</span>';
+  if (text === 'sanal test uygun') return '<span class="pill ready">sanal test uygun</span>';
+  if (text === 'risk/ödül zayıf') return '<span class="pill wait">risk/ödül zayıf</span>';
+  return '<span class="pill avoid">' + text + '</span>';
+}
 async function loadStatus() {
   const data = await api('/status');
   document.getElementById('mode').textContent = data.config.tradingMode;
@@ -169,8 +193,8 @@ async function loadScanner() {
       '<td class="muted">' + (d.reason || '') + '</td>' +
     '</tr>';
   }).join('');
-  document.getElementById('scannerTable').innerHTML = '<div class="tableWrap"><table><thead><tr><th>Coin</th><th>Score</th><th>Güven</th><th>Regime</th><th>Risk</th><th>Yön</th><th>Akıllı Karar</th><th>Bitget</th><th>24s %</th><th>Likidite</th><th>Sanal Plan</th><th>Giriş Bölgesi</th><th>Stop</th><th>Kar 1</th><th>Kar 2</th><th>R/R</th><th>Açıklama</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
-  showSmall('Bitget Smart Radar v0.4 özeti: ' + (data.count || 0) + ' coin tarandı. Sanal işlem gerçek para kullanmaz.', (data.results || []).map(item => ({ symbol:item.symbol, score:item.score, confidence:item.confidence, risk:item.riskTier, yon:item.directionBias, karar:item.decision?.label, plan:item.virtualTradePlan?.quality, giris:item.virtualTradePlan?.entryZone, stop:item.virtualTradePlan?.stopLoss, kar1:item.virtualTradePlan?.takeProfit1, rr:item.virtualTradePlan?.riskRewardToTp1 })));
+  document.getElementById('scannerTable').innerHTML = '<div class="tableWrap"><table><thead><tr><th>Coin</th><th>Puan</th><th>Güven</th><th>Durum</th><th>Risk</th><th>Yön</th><th>Akıllı Karar</th><th>Bitget</th><th>24s %</th><th>Likidite</th><th>Sanal Plan</th><th>Giriş Bölgesi</th><th>Stop</th><th>Kar 1</th><th>Kar 2</th><th>R/R</th><th>Açıklama</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+  showSmall('Bitget Smart Radar v0.5 özeti: ' + (data.count || 0) + ' coin tarandı. Sanal işlem gerçek para kullanmaz.', (data.results || []).map(item => ({ symbol:item.symbol, puan:item.score, guven:item.confidence, risk:item.riskTier, yon:item.directionBias, karar:item.decision?.label, sanalPlan:readablePlanQuality(item.virtualTradePlan), giris:item.virtualTradePlan?.entryZone, stop:item.virtualTradePlan?.stopLoss, kar1:item.virtualTradePlan?.takeProfit1, rr:item.virtualTradePlan?.riskRewardToTp1 })));
 }
 async function openVirtualDemo() {
   await api('/paper/open', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ exchange:'bitget', symbol:'BTCUSDT', side:'long', entryPrice:100000, stopLoss:99000, takeProfit:102000, positionSizeEur:100 }) });
