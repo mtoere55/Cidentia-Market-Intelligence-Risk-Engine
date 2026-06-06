@@ -42,3 +42,7 @@ export async function getCombinedTicker(symbol) {
   }
   return results;
 }
+
+export async function getBitgetTopSymbols(limit = 40) {
+  return adapters.bitget.getTopSymbols(limit);
+}
