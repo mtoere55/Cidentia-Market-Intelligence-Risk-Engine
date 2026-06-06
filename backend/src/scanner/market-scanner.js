@@ -50,6 +50,26 @@ function calculateSpreadPercent(tickers) {
   return ((max - min) / min) * 100;
 }
 
+function compactTicker(ticker) {
+  if (!ticker || ticker.ok === false) {
+    return {
+      exchange: ticker?.exchange,
+      ok: false,
+      error: ticker?.error,
+    };
+  }
+
+  return {
+    exchange: ticker.exchange,
+    ok: true,
+    source: ticker.source || 'spot',
+    symbol: ticker.symbol,
+    lastPrice: ticker.lastPrice,
+    priceChangePercent: ticker.priceChangePercent,
+    quoteVolume: ticker.quoteVolume,
+  };
+}
+
 export async function scanSymbol(symbol) {
   const tickers = await getCombinedTicker(symbol);
   const analyses = tickers.map(analyzeTicker);
@@ -66,7 +86,7 @@ export async function scanSymbol(symbol) {
     spreadPercent,
     reasons: combined.reasons,
     exchanges: analyses,
-    tickers,
+    tickers: tickers.map(compactTicker),
   };
 }
 
