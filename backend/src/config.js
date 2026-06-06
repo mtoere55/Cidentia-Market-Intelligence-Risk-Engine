@@ -30,6 +30,7 @@ export const config = {
   maxOpenPositions: numberFromEnv('MAX_OPEN_POSITIONS', 2),
   requireStopLoss: boolFromEnv('REQUIRE_STOP_LOSS', true),
   binanceBaseUrl: process.env.BINANCE_BASE_URL || 'https://api.binance.com',
+  binanceFuturesBaseUrl: process.env.BINANCE_FUTURES_BASE_URL || 'https://fapi.binance.com',
   bitgetBaseUrl: process.env.BITGET_BASE_URL || 'https://api.bitget.com',
 };
 
