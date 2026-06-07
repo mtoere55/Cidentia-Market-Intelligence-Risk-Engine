@@ -127,6 +127,8 @@ export function queueVirtualSetup(setup) {
   const takeProfit2 = toNumber(setup.takeProfit2);
   const positionSizeEur = toNumber(setup.positionSizeEur, 0);
   const maxRiskEur = toNumber(setup.maxRiskEur, null);
+  const activateNow = setup.activateNow === true;
+  const currentPrice = toNumber(setup.currentPrice, null);
 
   if (!symbol || !['long', 'short'].includes(side)) {
     return { accepted: false, reason: 'INVALID_SYMBOL_OR_SIDE' };
@@ -136,10 +138,17 @@ export function queueVirtualSetup(setup) {
     return { accepted: false, reason: 'MISSING_ENTRY_STOP_TP_OR_SIZE' };
   }
 
+  if (activateNow && currentPrice === null) {
+    return { accepted: false, reason: 'MISSING_CURRENT_PRICE_FOR_MARKET_PAPER_ENTRY' };
+  }
+
   const duplicate = paperState.setups.find((item) => item.symbol === symbol && ['queued', 'active', 'tp1_hit'].includes(item.status));
   if (duplicate) {
     return { accepted: false, reason: 'SETUP_ALREADY_ACTIVE_OR_QUEUED', setup: duplicate };
   }
+
+  const initialStatus = activateNow ? 'active' : 'queued';
+  const initialPrice = activateNow ? currentPrice : null;
 
   const queued = {
     id: `setup_${Date.now()}_${symbol}`,
@@ -150,7 +159,7 @@ export function queueVirtualSetup(setup) {
       from: toNumber(entryZone.from),
       to: toNumber(entryZone.to),
     },
-    entryPrice: null,
+    entryPrice: initialPrice,
     stopLoss,
     takeProfit1,
     takeProfit2,
@@ -158,10 +167,12 @@ export function queueVirtualSetup(setup) {
     maxRiskEur,
     riskRewardToTp1: toNumber(setup.riskRewardToTp1, null),
     sourceDecision: setup.sourceDecision || null,
-    status: 'queued',
+    status: initialStatus,
     createdAt: nowIso(),
-    lastCheckedAt: null,
-    currentPrice: null,
+    activatedAt: activateNow ? nowIso() : null,
+    entryMode: activateNow ? 'paper_market_now' : 'paper_entry_zone',
+    lastCheckedAt: activateNow ? nowIso() : null,
+    currentPrice: initialPrice,
     unrealizedPnlEur: 0,
     unrealizedPnlPercent: 0,
     realizedPnlEur: 0,
@@ -169,7 +180,12 @@ export function queueVirtualSetup(setup) {
   };
 
   paperState.setups.unshift(queued);
-  paperState.journal.push({ id: `queue_${Date.now()}`, createdAt: nowIso(), type: 'QUEUE_VIRTUAL_SETUP', setup: queued });
+  paperState.journal.push({
+    id: `queue_${Date.now()}`,
+    createdAt: nowIso(),
+    type: activateNow ? 'PAPER_MARKET_ENTRY_NOW' : 'QUEUE_VIRTUAL_SETUP',
+    setup: queued,
+  });
   return { accepted: true, setup: queued, state: paperState };
 }
 
@@ -193,7 +209,7 @@ export function getPaperPerformance() {
 
   return {
     ok: true,
-    mode: 'paper-performance-v1.1',
+    mode: 'paper-performance-v1.3-market-now',
     generatedAt: nowIso(),
     summary: {
       queued: setups.filter((item) => item.status === 'queued').length,
