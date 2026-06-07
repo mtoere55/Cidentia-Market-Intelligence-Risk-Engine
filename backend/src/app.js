@@ -4,7 +4,7 @@ import { config, realTradingGateIsOpen } from './config.js';
 import { getAllExchangeHealth, getCombinedTicker, getExchange, listExchanges } from './exchanges/exchange-manager.js';
 import { analyzeTicker, combineExchangeAnalysis } from './intelligence/simple-intelligence.js';
 import { evaluateTradeRisk } from './risk-engine/risk-engine.js';
-import { getPaperState, openPaperTrade, resetPaperState } from './paper-trading/paper-engine.js';
+import { getPaperState, openPaperTrade, resetPaperState, queueVirtualSetup, updateVirtualSetups, getPaperPerformance } from './paper-trading/paper-engine.js';
 import { DEFAULT_SCANNER_SYMBOLS, scanMarket } from './scanner/market-scanner.js';
 import { dashboardHtml } from './dashboard-html.js';
 
@@ -47,6 +47,7 @@ app.get('/status', async (req, res) => {
     exchanges: listExchanges(),
     exchangeHealth,
     paper: getPaperState(),
+    paperPerformance: getPaperPerformance().summary,
   });
 });
 
@@ -93,6 +94,34 @@ app.post('/risk/evaluate', (req, res) => {
 
 app.get('/paper', (req, res) => {
   res.json(getPaperState());
+});
+
+app.get('/paper/performance', (req, res) => {
+  res.json(getPaperPerformance());
+});
+
+app.post('/paper/queue', (req, res) => {
+  res.json(queueVirtualSetup(req.body || {}));
+});
+
+app.post('/paper/refresh', async (req, res) => {
+  const symbols = getPaperState().setups
+    .filter((item) => ['queued', 'active', 'tp1_hit'].includes(item.status))
+    .map((item) => item.symbol);
+
+  const uniqueSymbols = [...new Set(symbols)];
+  const priceMap = {};
+
+  for (const symbol of uniqueSymbols) {
+    try {
+      const ticker = await getExchange('bitget').getTicker(symbol);
+      priceMap[symbol] = ticker.lastPrice;
+    } catch (error) {
+      priceMap[symbol] = null;
+    }
+  }
+
+  res.json(updateVirtualSetups(priceMap));
 });
 
 app.post('/paper/open', (req, res) => {
