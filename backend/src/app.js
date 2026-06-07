@@ -104,6 +104,26 @@ app.post('/paper/queue', (req, res) => {
   res.json(queueVirtualSetup(req.body || {}));
 });
 
+app.post('/paper/market-now', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const symbol = String(body.symbol || '').toUpperCase();
+    if (!symbol) {
+      return res.status(400).json({ accepted: false, reason: 'MISSING_SYMBOL' });
+    }
+    const ticker = await getExchange('bitget').getTicker(symbol);
+    res.json(queueVirtualSetup({
+      ...body,
+      exchange: body.exchange || 'bitget',
+      symbol,
+      currentPrice: ticker.lastPrice,
+      activateNow: true,
+    }));
+  } catch (error) {
+    res.status(500).json({ accepted: false, reason: error.message });
+  }
+});
+
 app.post('/paper/refresh', async (req, res) => {
   const symbols = getPaperState().setups
     .filter((item) => ['queued', 'active', 'tp1_hit'].includes(item.status))
