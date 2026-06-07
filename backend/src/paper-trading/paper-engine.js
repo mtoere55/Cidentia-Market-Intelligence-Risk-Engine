@@ -1,11 +1,8 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { evaluateTradeRisk } from '../risk-engine/risk-engine.js';
 
-const paperState = {
-  virtualBalanceEur: 1000,
-  positions: [],
-  setups: [],
-  journal: [],
-};
+const PAPER_STATE_FILE = process.env.PAPER_STATE_FILE || (process.env.VERCEL ? '' : '/var/lib/cidentia-market-risk-engine/paper-state.json');
 
 function nowIso() {
   return new Date().toISOString();
@@ -21,6 +18,55 @@ function round(value, decimals = 2) {
   if (!Number.isFinite(n)) return null;
   return Number(n.toFixed(decimals));
 }
+
+function createDefaultPaperState() {
+  return {
+    virtualBalanceEur: 1000,
+    positions: [],
+    setups: [],
+    journal: [],
+  };
+}
+
+function normalizePaperState(input) {
+  const base = createDefaultPaperState();
+  if (!input || typeof input !== 'object') return base;
+
+  return {
+    virtualBalanceEur: toNumber(input.virtualBalanceEur, 1000),
+    positions: Array.isArray(input.positions) ? input.positions : [],
+    setups: Array.isArray(input.setups) ? input.setups : [],
+    journal: Array.isArray(input.journal) ? input.journal.slice(-500) : [],
+  };
+}
+
+function loadPaperState() {
+  if (!PAPER_STATE_FILE) return createDefaultPaperState();
+
+  try {
+    if (!fs.existsSync(PAPER_STATE_FILE)) return createDefaultPaperState();
+    const raw = fs.readFileSync(PAPER_STATE_FILE, 'utf8');
+    return normalizePaperState(JSON.parse(raw));
+  } catch (error) {
+    console.warn(`Paper state load failed: ${error.message}`);
+    return createDefaultPaperState();
+  }
+}
+
+function savePaperState() {
+  if (!PAPER_STATE_FILE) return;
+
+  try {
+    fs.mkdirSync(path.dirname(PAPER_STATE_FILE), { recursive: true });
+    const tmp = `${PAPER_STATE_FILE}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(paperState, null, 2));
+    fs.renameSync(tmp, PAPER_STATE_FILE);
+  } catch (error) {
+    console.warn(`Paper state save failed: ${error.message}`);
+  }
+}
+
+let paperState = loadPaperState();
 
 function getEntryMid(setup) {
   const from = toNumber(setup.entryZone?.from);
@@ -104,7 +150,13 @@ function evaluateSetupWithPrice(setup, price) {
 }
 
 export function getPaperState() {
-  return paperState;
+  return {
+    ...paperState,
+    persistence: {
+      enabled: Boolean(PAPER_STATE_FILE),
+      file: PAPER_STATE_FILE || null,
+    },
+  };
 }
 
 export function resetPaperState() {
@@ -115,7 +167,8 @@ export function resetPaperState() {
     createdAt: nowIso(),
     type: 'PAPER_STATE_RESET',
   });
-  return paperState;
+  savePaperState();
+  return getPaperState();
 }
 
 export function queueVirtualSetup(setup) {
@@ -186,15 +239,19 @@ export function queueVirtualSetup(setup) {
     type: activateNow ? 'PAPER_MARKET_ENTRY_NOW' : 'QUEUE_VIRTUAL_SETUP',
     setup: queued,
   });
-  return { accepted: true, setup: queued, state: paperState };
+  paperState.journal = paperState.journal.slice(-500);
+  savePaperState();
+  return { accepted: true, setup: queued, state: getPaperState() };
 }
 
 export function updateVirtualSetups(priceMap = {}) {
-  const before = paperState.setups.map((item) => item.status).join('|');
+  const before = JSON.stringify(paperState.setups.map((item) => [item.id, item.status, item.currentPrice, item.unrealizedPnlEur, item.realizedPnlEur]));
   paperState.setups = paperState.setups.map((setup) => evaluateSetupWithPrice(setup, priceMap[setup.symbol]));
-  const after = paperState.setups.map((item) => item.status).join('|');
+  const after = JSON.stringify(paperState.setups.map((item) => [item.id, item.status, item.currentPrice, item.unrealizedPnlEur, item.realizedPnlEur]));
   if (before !== after) {
     paperState.journal.push({ id: `refresh_${Date.now()}`, createdAt: nowIso(), type: 'REFRESH_VIRTUAL_SETUPS', priceMap });
+    paperState.journal = paperState.journal.slice(-500);
+    savePaperState();
   }
   return getPaperPerformance();
 }
@@ -209,8 +266,12 @@ export function getPaperPerformance() {
 
   return {
     ok: true,
-    mode: 'paper-performance-v1.3-market-now',
+    mode: 'paper-performance-v1.4-persistent-state',
     generatedAt: nowIso(),
+    persistence: {
+      enabled: Boolean(PAPER_STATE_FILE),
+      file: PAPER_STATE_FILE || null,
+    },
     summary: {
       queued: setups.filter((item) => item.status === 'queued').length,
       active: setups.filter((item) => item.status === 'active').length,
@@ -252,6 +313,8 @@ export function openPaperTrade(order) {
 
   if (!risk.accepted) {
     paperState.journal.push(event);
+    paperState.journal = paperState.journal.slice(-500);
+    savePaperState();
     return { accepted: false, event };
   }
 
@@ -270,6 +333,8 @@ export function openPaperTrade(order) {
 
   paperState.positions.push(position);
   paperState.journal.push({ ...event, type: 'OPEN_PAPER_TRADE_ACCEPTED', position });
+  paperState.journal = paperState.journal.slice(-500);
+  savePaperState();
 
   return { accepted: true, position, risk };
 }
